@@ -5,11 +5,14 @@ from abc import ABC, abstractmethod
 from typing import Optional
 import re
 
+from config import settings
+
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
 }
 
 MAX_RETRIES = 2
@@ -33,6 +36,13 @@ class BaseScraper(ABC):
         if self._session and not self._session.closed:
             await self._session.close()
 
+    def _proxy_url(self, url: str) -> str:
+        """Route URL through Cloudflare Worker if configured."""
+        worker = getattr(settings, "CF_WORKER_URL", None)
+        if worker:
+            return f"{worker}?url={url}"
+        return url
+
     async def _get_with_cloudscraper(self, url: str, headers: dict = {}) -> str:
         """Fallback for Cloudflare-protected sites — runs in executor to avoid blocking."""
         import cloudscraper
@@ -55,9 +65,11 @@ class BaseScraper(ABC):
         session = await self._get_session()
         last_error = None
 
+        proxied = self._proxy_url(url)
+
         for attempt in range(MAX_RETRIES):
             try:
-                async with session.get(url, **kwargs) as resp:
+                async with session.get(proxied, **kwargs) as resp:
                     resp.raise_for_status()
                     return await resp.text()
             except aiohttp.ClientResponseError as e:
@@ -86,9 +98,11 @@ class BaseScraper(ABC):
         session = await self._get_session()
         last_error = None
 
+        proxied = self._proxy_url(url)
+
         for attempt in range(MAX_RETRIES):
             try:
-                async with session.get(url, **kwargs) as resp:
+                async with session.get(proxied, **kwargs) as resp:
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientResponseError as e:

@@ -11,4 +11,4 @@ SQLAlchemy==2.0.49
 gunicorn
 uvicorn
 asyncpg
-
+brotli

@@ -1,5 +1,6 @@
 # backend/config.py
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     # Database
@@ -26,6 +27,9 @@ class Settings(BaseSettings):
     # In dev this is empty so the frontend uses relative /proxy/hls paths via Vite proxy
     # In prod set this to your deployed API URL e.g. https://your-api.onrender.com
     BACKEND_URL: str = ""
+
+    # Cloudflare Worker proxy (optional)
+    CF_WORKER_URL: Optional[str] = None
 
     class Config:
         env_file = ".env"
