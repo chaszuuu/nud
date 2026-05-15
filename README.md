@@ -194,4 +194,5 @@ curl https://your-api.onrender.com/content/admin/health
 
 ---
 © 2026 chaszuu. All rights reserved.
+
 Made with ♥ by [chaszuu](https://github.com/chaszuu)
