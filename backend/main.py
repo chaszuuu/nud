@@ -1,8 +1,11 @@
 # backend/main.py
 import asyncio
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 
 from config import settings
@@ -52,3 +55,9 @@ app.include_router(proxy_router,     prefix="/proxy",   tags=["proxy"])
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# Serve frontend — must be last so it doesn't shadow API routes
+frontend_dist = os.path.join(os.path.dirname(__file__), "../frontend/dist")
+if os.path.exists(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
