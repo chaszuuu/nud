@@ -6,6 +6,25 @@ Content metadata is sourced from TMDB and matched against live stream sources at
 
 ---
 
+## Engineering Highlights
+
+**Availability State Machine**
+Content goes through an explicit state machine before it's shown to users. Rather than a nullable `source_slug` column, availability is tracked as a first-class concern with its own model, status transitions, exponential backoff retry, and consecutive-failure tolerance to avoid flipping healthy content on transient scraper blips.
+
+**JIT Stream Resolution**
+Streams are resolved at play-time using a headless browser pipeline. The resolver intercepts network traffic to extract raw HLS manifests and subtitle tracks without relying on APIs that don't exist.
+
+**Swappable Execution Driver**
+The availability checking system is decoupled from its execution strategy. On free tier it runs inline on startup. On paid tier a single env var (`AVAILABILITY_DRIVER=arq`) switches it to a proper task queue with Redis broker and scheduled cron sweeps — zero code changes required.
+
+**Redis Session Management**
+Browser session cookies are stored in Redis with a 7-day TTL instead of local files. Cookies survive deploys, are shared across instances when scaled, and never end up in version control.
+
+**Async-First Architecture**
+Fully async Python stack — FastAPI, SQLAlchemy async, aiohttp. Playwright runs in isolated thread pool workers so the uvicorn event loop is never blocked during stream resolution.
+
+---
+
 ## Stack
 
 **Backend**
@@ -35,7 +54,7 @@ nud/
 │   ├── models/         # SQLAlchemy models
 │   ├── proxy/          # HLS proxy
 │   ├── routers/        # API endpoints
-│   ├── scrapers/       # Stream resolvers
+│   ├── scrapers/       # JIT stream resolvers
 │   ├── schemas/        # Pydantic schemas
 │   └── workers/        # DB writer
 └── frontend/
@@ -123,25 +142,25 @@ PENDING → CHECKING → MATCHED   ← shown on home/search
 MATCHED → CHECKING → LOST      ← hidden until re-confirmed
 ```
 
-On startup the app preloads the top trending titles across all categories (trending, anime, kdrama, cdrama, jdrama) and runs each through the scraper. Only `MATCHED` content appears in the UI.
+On startup the app preloads the top trending titles across all categories and runs each through the resolver. Only `MATCHED` content appears in the UI. `LOST` content is retried on a backoff schedule and flips back to `MATCHED` automatically when it reappears.
 
 ### Stream Resolution
 
 When a user plays a title:
-1. The backend looks up the confirmed source slug
-2. Playwright resolves the embed URL to a raw `.m3u8` stream
-3. The HLS stream is proxied through the backend to the player
+1. Backend looks up the confirmed source
+2. Headless browser resolves the embed to a raw `.m3u8` stream
+3. HLS stream is proxied through the backend to the player
 4. Subtitles are extracted and passed to hls.js
 
-### Categories
+### Content Categories
 
 | Category | Source |
 |---|---|
 | Trending | TMDB `/trending/all/day` |
-| Anime | TMDB `/discover/tv` — genre 16 + JP origin |
-| K-Drama | TMDB `/discover/tv` — KR origin |
-| C-Drama | TMDB `/discover/tv` — CN origin |
-| J-Drama | TMDB `/discover/tv` — JP origin, non-anime |
+| Anime | TMDB Discover — animation genre + JP origin |
+| K-Drama | TMDB Discover — KR origin |
+| C-Drama | TMDB Discover — CN origin |
+| J-Drama | TMDB Discover — JP origin, non-anime |
 
 ---
 
@@ -156,7 +175,7 @@ When a user plays a title:
 | `POST` | `/content/stream/start` | Start stream job |
 | `GET` | `/content/stream/status/{job_id}` | Poll stream job |
 | `GET` | `/search/?q=` | Search matched content |
-| `GET` | `/content/admin/health` | System health + scraper status |
+| `GET` | `/content/admin/health` | System health + resolver status |
 | `GET` | `/auth/google` | Google OAuth login |
 | `GET` | `/auth/google/callback` | OAuth callback |
 | `GET` | `/auth/me` | Current user |
@@ -172,6 +191,12 @@ Deployed on Render. Requires:
 - Redis
 
 Set `APP_ENV=production` and fill in `CORS_ORIGINS` and `BACKEND_URL` with your Render URLs before deploying.
+
+**Scaling path** — to move from free tier to a proper worker setup:
+```
+AVAILABILITY_DRIVER=arq
+```
+Then add a background worker service. No code changes required.
 
 ---
 
@@ -193,6 +218,7 @@ curl https://your-api.onrender.com/content/admin/health
 ```
 
 ---
+
 © 2026 chaszuu. All rights reserved.
 
-Made with ♥ by [chaszuu](https://github.com/chaszuu)
+made with ❤️ by chaszuu
