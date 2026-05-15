@@ -70,9 +70,8 @@ class Movies2WatchScraper(BaseScraper):
     # ------------------------------------------------------------------ #
 
     async def search(self, query: str) -> list[dict]:
-        session = await self._get_session()
         try:
-            async with session.get(
+            html = await self._get(
                 f"{BASE_URL}/livesearch",
                 params={"q": query},
                 headers={
@@ -80,11 +79,7 @@ class Movies2WatchScraper(BaseScraper):
                     "X-Requested-With": "XMLHttpRequest",
                     "Accept": "*/*",
                 },
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning(f"[movies2watch] livesearch {resp.status} for '{query}'")
-                    return []
-                html = await resp.text()
+            )
         except Exception as e:
             logger.error(f"[movies2watch] livesearch failed: {e}", exc_info=True)
             return []
