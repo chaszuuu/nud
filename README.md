@@ -191,3 +191,7 @@ curl https://your-api.onrender.com/content/admin/health
   }
 }
 ```
+
+---
+
+made with ❤️ by chaszuu
