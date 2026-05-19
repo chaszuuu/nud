@@ -49,7 +49,7 @@ async def get_trending(
     request: Request,
     media_type: str = Query("all", pattern="^(all|movie|tv)$"),
     time_window: str = Query("day", pattern="^(day|week)$"),
-    category: str = Query(None),  # filter by: anime, kdrama, cdrama, jdrama, movie, series
+    category: str = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -58,7 +58,6 @@ async def get_trending(
     if cached:
         return cached
 
-    # Only serve content that is confirmed available on the scraper
     query = (
         select(Content)
         .join(ContentAvailability, Content.id == ContentAvailability.content_id)
@@ -74,8 +73,6 @@ async def get_trending(
     contents = result.scalars().all()
 
     if not contents:
-        # DB is cold — trigger preloader in background and return empty
-        # User will see content after next startup / next request once preloader runs
         asyncio.create_task(_trigger_preload())
         return []
 
@@ -115,47 +112,68 @@ async def _resolve_stream_job(job_id: str, content: Content):
     job.status  = JobStatus.RUNNING
     job.message = "Launching player..."
 
-    if content.source_site not in SCRAPERS:
+    stream_result = None
+
+    # ── 1. vidsrc (primary) — works on Render, no IP restrictions ── #
+    if content.tmdb_id:
+        logger.info(f"[jobs] {job_id} trying vidsrc tmdb_id={content.tmdb_id}")
+        try:
+            from scrapers.f16px import F16pxResolver
+            if job.season and job.episode:
+                embed_url = f"https://vidsrc.to/embed/tv/{content.tmdb_id}/{job.season}/{job.episode}"
+            else:
+                embed_url = f"https://vidsrc.to/embed/movie/{content.tmdb_id}"
+
+            job.message = "Finding stream source..."
+            vidsrc_result = await F16pxResolver.resolve_once(embed_url)
+            if vidsrc_result:
+                stream_result = {
+                    "stream_url": vidsrc_result.url,
+                    "subtitles":  vidsrc_result.subtitles,
+                }
+                logger.info(f"[jobs] {job_id} vidsrc succeeded")
+        except Exception as e:
+            logger.error(f"[jobs] {job_id} vidsrc failed: {e}")
+
+    # ── 2. movies2watch fallback ── #
+    if not stream_result and content.source_site in SCRAPERS:
+        logger.info(f"[jobs] {job_id} falling back to movies2watch")
+        scraper = SCRAPERS[content.source_site]()
+        try:
+            job.message   = "Trying alternate source..."
+            stream_result = await scraper.get_stream(
+                slug=content.source_slug,
+                episode=job.episode,
+                season=job.season,
+                site_path=getattr(content, "site_path", None),
+            )
+            if stream_result:
+                logger.info(f"[jobs] {job_id} movies2watch succeeded")
+        except Exception as e:
+            logger.error(f"[jobs] {job_id} movies2watch failed: {e}")
+        finally:
+            await scraper.close()
+
+    # ── Done ── #
+    if not stream_result or not stream_result.get("stream_url"):
         job.status = JobStatus.FAILED
-        job.error  = "No stream source available"
+        job.error  = "Stream not found"
         return
 
-    scraper = SCRAPERS[content.source_site]()
-    try:
-        job.message   = "Finding stream source..."
-        stream_result = await scraper.get_stream(
-            slug=content.source_slug,
-            episode=job.episode,
-            season=job.season,
-            site_path=getattr(content, "site_path", None),
-        )
+    proxied_url = _stream_url(stream_result["stream_url"])
+    subtitles   = stream_result.get("subtitles", [])
 
-        if not stream_result or not stream_result.get("stream_url"):
-            job.status = JobStatus.FAILED
-            job.error  = "Stream not found"
-            return
+    job.status     = JobStatus.READY
+    job.stream_url = proxied_url
+    job.subtitles  = subtitles
+    job.message    = "Stream ready"
 
-        proxied_url = _stream_url(stream_result["stream_url"])
-        subtitles   = stream_result.get("subtitles", [])
+    await cache_set("stream", cache_key, {
+        "stream_url": proxied_url,
+        "subtitles":  subtitles,
+    }, ttl=3600)
 
-        job.status     = JobStatus.READY
-        job.stream_url = proxied_url
-        job.subtitles  = subtitles
-        job.message    = "Stream ready"
-
-        await cache_set("stream", cache_key, {
-            "stream_url": proxied_url,
-            "subtitles":  subtitles,
-        }, ttl=3600)
-
-        logger.info(f"[jobs] {job_id} ready: {proxied_url[:80]}...")
-
-    except Exception as e:
-        logger.error(f"[jobs] {job_id} failed: {e}", exc_info=True)
-        job.status = JobStatus.FAILED
-        job.error  = "Failed to resolve stream"
-    finally:
-        await scraper.close()
+    logger.info(f"[jobs] {job_id} ready: {proxied_url[:80]}...")
 
 
 @router.post("/stream/start", response_model=dict)
@@ -172,11 +190,9 @@ async def start_stream(
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
-    # Check availability table first
     avail = await db.get(ContentAvailability, content.id)
 
     if not avail or avail.status != AvailabilityStatus.MATCHED:
-        # Not confirmed available — try on-demand match
         from scrapers.matcher import find_stream_source
         logger.info(f"[stream] on-demand match for '{content.title}'")
         try:
@@ -197,21 +213,23 @@ async def start_stream(
             content.source_slug = match["source_slug"]
             content.site_path   = match.get("site_path")
 
-            # Update availability table
             if not avail:
                 avail = ContentAvailability(content_id=content.id)
                 db.add(avail)
             from datetime import datetime
-            avail.status        = AvailabilityStatus.MATCHED
-            avail.source_site   = match["source_site"]
-            avail.source_slug   = match["source_slug"]
-            avail.site_path     = match.get("site_path")
-            avail.last_found_at = datetime.utcnow()
+            avail.status          = AvailabilityStatus.MATCHED
+            avail.source_site     = match["source_site"]
+            avail.source_slug     = match["source_slug"]
+            avail.site_path       = match.get("site_path")
+            avail.last_found_at   = datetime.utcnow()
             avail.last_checked_at = datetime.utcnow()
 
             await db.commit()
         else:
-            raise HTTPException(status_code=404, detail="No stream source available")
+            # No movies2watch match — vidsrc will handle it in the job
+            # as long as we have a tmdb_id, don't block the user
+            if not content.tmdb_id:
+                raise HTTPException(status_code=404, detail="No stream source available")
 
     job = create_job(payload.content_id, payload.season, payload.episode)
     asyncio.create_task(_resolve_stream_job(job.job_id, content))
@@ -337,7 +355,6 @@ async def system_health(
 
     stats = await get_stats(db)
 
-    # Live scraper health check
     scraper_ok = False
     scraper_ms = None
     try:
@@ -350,8 +367,8 @@ async def system_health(
         pass
 
     return {
-        "scraper_healthy":  scraper_ok,
+        "scraper_healthy":    scraper_ok,
         "scraper_latency_ms": scraper_ms,
-        "availability":     stats,
-        "timestamp":        datetime.utcnow().isoformat(),
+        "availability":       stats,
+        "timestamp":          datetime.utcnow().isoformat(),
     }
