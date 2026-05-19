@@ -279,17 +279,30 @@ class Movies2WatchScraper(BaseScraper):
     # ------------------------------------------------------------------ #
 
     async def _resolve_embed(self, embed_url: str) -> Optional[dict]:
-        embed_url = _fix_embed_url(embed_url)
-        from scrapers.f16px import F16pxResolver
+        # If it's a wrapper site, follow the redirect to get the real f16px URL
+        if "0123movie.space" in embed_url or "f16px" not in embed_url:
+            try:
+                session = await self._get_session()
+                proxy = self._get_proxy()
+                async with session.get(
+                    embed_url,
+                    proxy=proxy,
+                    allow_redirects=True,
+                    headers={"Referer": BASE_URL},
+                ) as resp:
+                    real_url = str(resp.url)
+                    if "f16px.com" in real_url:
+                        logger.info(f"[movies2watch] resolved wrapper → {real_url[:80]}")
+                        embed_url = real_url
+            except Exception as e:
+                logger.warning(f"[movies2watch] wrapper redirect failed: {e}")
 
+        from scrapers.f16px import F16pxResolver
         for attempt in range(2):
             try:
                 result = await F16pxResolver.resolve_once(embed_url)
                 if result:
-                    return {
-                        "stream_url": result.url,
-                        "subtitles": result.subtitles,
-                    }
+                    return {"stream_url": result.url, "subtitles": result.subtitles}
                 logger.info(f"[movies2watch] attempt {attempt + 1} returned None")
             except Exception as e:
                 logger.error(f"[movies2watch] attempt {attempt + 1} failed: {e}")
