@@ -74,6 +74,7 @@ class Movies2WatchScraper(BaseScraper):
     async def _livesearch_via_playwright(self, query: str) -> Optional[str]:
         """
         Headless Chromium fallback for livesearch when aiohttp is blocked.
+        Visits homepage first to establish session before hitting livesearch.
         Runs in its own thread + event loop, identical pattern to f16px.py.
         """
         def _fetch_sync():
@@ -96,13 +97,25 @@ class Movies2WatchScraper(BaseScraper):
                             "AppleWebKit/537.36 (KHTML, like Gecko) "
                             "Chrome/122.0.0.0 Safari/537.36"
                         ),
+                        viewport={"width": 1280, "height": 800},
+                        locale="en-US",
+                        timezone_id="America/New_York",
                         extra_http_headers={
-                            "Referer": f"{BASE_URL}/home",
-                            "X-Requested-With": "XMLHttpRequest",
                             "Accept": "*/*",
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Accept-Encoding": "gzip, deflate, br",
+                            "X-Requested-With": "XMLHttpRequest",
                         },
                     )
                     page = await context.new_page()
+
+                    # Visit homepage first to establish session + pass JS challenge
+                    try:
+                        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=15_000)
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
+
                     try:
                         response = await page.goto(
                             url,
@@ -111,7 +124,10 @@ class Movies2WatchScraper(BaseScraper):
                         )
                         if response and response.status == 200:
                             return await response.text()
-                        logger.warning(f"[movies2watch] Playwright livesearch status: {response.status if response else 'None'}")
+                        logger.warning(
+                            f"[movies2watch] Playwright livesearch status: "
+                            f"{response.status if response else 'None'}"
+                        )
                         return None
                     finally:
                         await page.close()
