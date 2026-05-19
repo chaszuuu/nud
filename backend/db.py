@@ -8,7 +8,7 @@ from config import settings
 engine = create_async_engine(
     settings.DATABASE_URL,
     connect_args={
-        "statement_args": 0,
+        "statement_cache_size": 0,
     },
     echo=settings.APP_ENV == "development",  # logs SQL in dev only
     poolclass=NullPool,                       # safer for async, no connection leaks
