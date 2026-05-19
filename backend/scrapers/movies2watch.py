@@ -2,7 +2,9 @@
 import re
 import asyncio
 import logging
+import concurrent.futures
 from typing import Optional
+from urllib.parse import urlencode
 from scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
@@ -69,9 +71,69 @@ class Movies2WatchScraper(BaseScraper):
     #  Search — /livesearch?q= endpoint                                   #
     # ------------------------------------------------------------------ #
 
+    async def _livesearch_via_playwright(self, query: str) -> Optional[str]:
+        """
+        Headless Chromium fallback for livesearch when aiohttp is blocked.
+        Runs in its own thread + event loop, identical pattern to f16px.py.
+        """
+        def _fetch_sync():
+            async def _do() -> Optional[str]:
+                from playwright.async_api import async_playwright
+                url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
+                logger.info(f"[movies2watch] Playwright livesearch: {url}")
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-blink-features=AutomationControlled",
+                        ],
+                    )
+                    context = await browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/122.0.0.0 Safari/537.36"
+                        ),
+                        extra_http_headers={
+                            "Referer": f"{BASE_URL}/home",
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Accept": "*/*",
+                        },
+                    )
+                    page = await context.new_page()
+                    try:
+                        response = await page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=15_000,
+                        )
+                        if response and response.status == 200:
+                            return await response.text()
+                        logger.warning(f"[movies2watch] Playwright livesearch status: {response.status if response else 'None'}")
+                        return None
+                    finally:
+                        await page.close()
+                        await context.close()
+                        await browser.close()
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(_do())
+            finally:
+                loop.close()
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return await loop.run_in_executor(pool, _fetch_sync)
+
     async def search(self, query: str) -> list[dict]:
-        from urllib.parse import urlencode
         url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
+
+        # Try aiohttp first — works in dev, blocked on Render's AWS IPs
+        html = None
         try:
             html = await self._get(
                 url,
@@ -81,9 +143,17 @@ class Movies2WatchScraper(BaseScraper):
                     "Accept": "*/*",
                 },
             )
-        except Exception as e:
-            logger.error(f"[movies2watch] livesearch failed: {e}", exc_info=True)
-            return []
+        except Exception:
+            pass  # fall through to Playwright
+
+        # Playwright fallback — real Chromium bypasses IP/JS challenge blocks
+        if not html:
+            logger.info(f"[movies2watch] aiohttp blocked for '{query}', falling back to Playwright")
+            try:
+                html = await self._livesearch_via_playwright(query)
+            except Exception as e:
+                logger.error(f"[movies2watch] Playwright livesearch failed: {e}", exc_info=True)
+                return []
 
         if not html or not html.strip():
             return []
@@ -100,7 +170,6 @@ class Movies2WatchScraper(BaseScraper):
             ctype_raw, slug, block = m.groups()
             slug = slug.strip()
 
-            # Extract title from block
             title_m = re.search(
                 r'<div[^>]+class=["\']title["\'][^>]*>\s*([^<]+?)\s*</div>',
                 block,
@@ -112,9 +181,7 @@ class Movies2WatchScraper(BaseScraper):
                 continue
             seen.add(slug)
 
-            # Extract year from the block if present
             release_year = _extract_year(block)
-
             results.append(_make_result(ctype_raw, slug, title, release_year))
 
         logger.info(f"[movies2watch] livesearch '{query}' → {len(results)} results")
@@ -278,7 +345,7 @@ def _make_result(ctype_raw: str, slug: str, title: str, release_year: Optional[i
         "source_site": "movies2watch",
         "content_type": content_type,
         "site_path": ctype_raw,
-        "release_year": release_year,   # ← used by matcher for year-based disambiguation
+        "release_year": release_year,
     }
 
 
