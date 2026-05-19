@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional
 import re
-
+from urllib.parse import quote
 from config import settings
 
 
@@ -40,7 +40,7 @@ class BaseScraper(ABC):
         """Route URL through Cloudflare Worker if configured."""
         worker = getattr(settings, "CF_WORKER_URL", None)
         if worker:
-            return f"{worker}?url={url}"
+            return f"{worker}?url={quote(url, safe='')}"
         return url
 
     async def _get_with_cloudscraper(self, url: str, headers: dict = {}) -> str:
