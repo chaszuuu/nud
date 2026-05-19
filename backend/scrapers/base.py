@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from typing import Optional
 import re
 
+from config import settings
+
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -34,6 +36,10 @@ class BaseScraper(ABC):
         if self._session and not self._session.closed:
             await self._session.close()
 
+    def _get_proxy(self) -> Optional[str]:
+        """Return proxy URL if configured, None otherwise."""
+        return getattr(settings, "PROXY_SERVER", None) or None
+
     async def _get_with_cloudscraper(self, url: str, headers: dict = {}) -> str:
         """Fallback for Cloudflare-protected sites — runs in executor to avoid blocking."""
         import cloudscraper
@@ -54,11 +60,12 @@ class BaseScraper(ABC):
     async def _get(self, url: str, **kwargs) -> str:
         self._validate_url(url)
         session = await self._get_session()
+        proxy = self._get_proxy()
         last_error = None
 
         for attempt in range(MAX_RETRIES):
             try:
-                async with session.get(url, **kwargs) as resp:
+                async with session.get(url, proxy=proxy, **kwargs) as resp:
                     resp.raise_for_status()
                     return await resp.text()
             except aiohttp.ClientResponseError as e:
@@ -85,11 +92,12 @@ class BaseScraper(ABC):
     async def _get_json(self, url: str, **kwargs) -> dict:
         self._validate_url(url)
         session = await self._get_session()
+        proxy = self._get_proxy()
         last_error = None
 
         for attempt in range(MAX_RETRIES):
             try:
-                async with session.get(url, **kwargs) as resp:
+                async with session.get(url, proxy=proxy, **kwargs) as resp:
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientResponseError as e:

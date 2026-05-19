@@ -218,7 +218,7 @@ def _resolve_sync(embed_url: str) -> Optional[StreamResult]:
             page.on("response", handle_response)
 
             try:
-                await page.goto(embed_url, wait_until="networkidle", timeout=TIMEOUT_S * 1000)
+                await page.goto(embed_url, wait_until="domcontentloaded", timeout=TIMEOUT_S * 1000)
 
                 if not subtitles:
                     sub_match = re.search(r'sub\.info=([^&\s]+)', embed_url)
