@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     # In prod set this to your deployed API URL e.g. https://your-api.onrender.com
     BACKEND_URL: str = ""
 
-    # Cloudflare Worker proxy (optional)
-    CF_WORKER_URL: Optional[str] = None
+    # Workshare Residential proxy
+    PROXY_SERVER: str = ""
+    PROXY_USERNAME: str = ""
+    PROXY_PASSWORD: str = ""
 
     class Config:
         env_file = ".env"
