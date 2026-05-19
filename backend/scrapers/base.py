@@ -37,8 +37,17 @@ class BaseScraper(ABC):
             await self._session.close()
 
     def _get_proxy(self) -> Optional[str]:
-        """Return proxy URL if configured, None otherwise."""
-        return getattr(settings, "PROXY_SERVER", None) or None
+        """Return proxy URL with credentials embedded if configured."""
+        server = getattr(settings, "PROXY_SERVER", None)
+        username = getattr(settings, "PROXY_USERNAME", None)
+        password = getattr(settings, "PROXY_PASSWORD", None)
+    
+        if server and username and password:
+            # aiohttp requires credentials embedded in the proxy URL
+            # http://user:pass@host:port
+            server_clean = server.replace("http://", "")
+            return f"http://{username}:{password}@{server_clean}"
+        return None
 
     async def _get_with_cloudscraper(self, url: str, headers: dict = {}) -> str:
         """Fallback for Cloudflare-protected sites — runs in executor to avoid blocking."""
