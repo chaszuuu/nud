@@ -261,11 +261,17 @@ class Movies2WatchScraper(BaseScraper):
 
     async def _fetch_page(self, url: str, referer: str = f"{BASE_URL}/home") -> Optional[str]:
         try:
-            return await self._get(url, headers={"Referer": referer})
-        except Exception:
+            html = await self._get(url, headers={"Referer": referer})
+            if html:
+                return html
+            logger.warning(f"[movies2watch] _fetch_page empty response: {url}")
+            return None
+        except Exception as e:
+            logger.warning(f"[movies2watch] _fetch_page aiohttp failed ({url}): {e}")
             try:
                 return await self._get_with_cloudscraper(url, headers={"Referer": referer})
-            except Exception:
+            except Exception as e2:
+                logger.warning(f"[movies2watch] _fetch_page cloudscraper failed ({url}): {e2}")
                 return None
 
     # ------------------------------------------------------------------ #
