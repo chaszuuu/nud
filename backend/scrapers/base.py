@@ -37,7 +37,6 @@ class BaseScraper(ABC):
             await self._session.close()
 
     def _proxy_url(self, url: str) -> str:
-        """Route URL through Cloudflare Worker if configured."""
         worker = getattr(settings, "CF_WORKER_URL", None)
         if worker:
             return f"{worker}?url={quote(url, safe='')}"

@@ -70,10 +70,11 @@ class Movies2WatchScraper(BaseScraper):
     # ------------------------------------------------------------------ #
 
     async def search(self, query: str) -> list[dict]:
+        from urllib.parse import urlencode
+        url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
         try:
             html = await self._get(
-                f"{BASE_URL}/livesearch",
-                params={"q": query},
+                url,
                 headers={
                     "Referer": f"{BASE_URL}/home",
                     "X-Requested-With": "XMLHttpRequest",
