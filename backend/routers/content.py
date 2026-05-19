@@ -114,33 +114,12 @@ async def _resolve_stream_job(job_id: str, content: Content):
 
     stream_result = None
 
-    # ── 1. vidsrc (primary) — works on Render, no IP restrictions ── #
-    if content.tmdb_id:
-        logger.info(f"[jobs] {job_id} trying vidsrc tmdb_id={content.tmdb_id}")
-        try:
-            from scrapers.f16px import F16pxResolver
-            if job.season and job.episode:
-                embed_url = f"https://vidsrc.to/embed/tv/{content.tmdb_id}/{job.season}/{job.episode}"
-            else:
-                embed_url = f"https://vidsrc.to/embed/movie/{content.tmdb_id}"
-
-            job.message = "Finding stream source..."
-            vidsrc_result = await F16pxResolver.resolve_once(embed_url)
-            if vidsrc_result:
-                stream_result = {
-                    "stream_url": vidsrc_result.url,
-                    "subtitles":  vidsrc_result.subtitles,
-                }
-                logger.info(f"[jobs] {job_id} vidsrc succeeded")
-        except Exception as e:
-            logger.error(f"[jobs] {job_id} vidsrc failed: {e}")
-
-    # ── 2. movies2watch fallback ── #
-    if not stream_result and content.source_site in SCRAPERS:
-        logger.info(f"[jobs] {job_id} falling back to movies2watch")
+    # ── 1. movies2watch (primary) — residential proxy fixes livesearch ── #
+    if content.source_site in SCRAPERS:
+        logger.info(f"[jobs] {job_id} trying movies2watch slug={content.source_slug}")
         scraper = SCRAPERS[content.source_site]()
         try:
-            job.message   = "Trying alternate source..."
+            job.message   = "Finding stream source..."
             stream_result = await scraper.get_stream(
                 slug=content.source_slug,
                 episode=job.episode,
@@ -153,6 +132,27 @@ async def _resolve_stream_job(job_id: str, content: Content):
             logger.error(f"[jobs] {job_id} movies2watch failed: {e}")
         finally:
             await scraper.close()
+
+    # ── 2. vidsrc fallback — TMDB ID direct, no search needed ── #
+    if not stream_result and content.tmdb_id:
+        logger.info(f"[jobs] {job_id} falling back to vidsrc tmdb_id={content.tmdb_id}")
+        try:
+            from scrapers.f16px import F16pxResolver
+            if job.season and job.episode:
+                embed_url = f"https://vidsrc.to/embed/tv/{content.tmdb_id}/{job.season}/{job.episode}"
+            else:
+                embed_url = f"https://vidsrc.to/embed/movie/{content.tmdb_id}"
+
+            job.message = "Trying alternate source..."
+            vidsrc_result = await F16pxResolver.resolve_once(embed_url)
+            if vidsrc_result:
+                stream_result = {
+                    "stream_url": vidsrc_result.url,
+                    "subtitles":  vidsrc_result.subtitles,
+                }
+                logger.info(f"[jobs] {job_id} vidsrc succeeded")
+        except Exception as e:
+            logger.error(f"[jobs] {job_id} vidsrc failed: {e}")
 
     # ── Done ── #
     if not stream_result or not stream_result.get("stream_url"):
@@ -226,8 +226,7 @@ async def start_stream(
 
             await db.commit()
         else:
-            # No movies2watch match — vidsrc will handle it in the job
-            # as long as we have a tmdb_id, don't block the user
+            # No movies2watch match — vidsrc fallback handles it via tmdb_id
             if not content.tmdb_id:
                 raise HTTPException(status_code=404, detail="No stream source available")
 
