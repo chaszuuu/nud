@@ -73,13 +73,14 @@ class Movies2WatchScraper(BaseScraper):
 
     async def _livesearch_via_playwright(self, query: str) -> Optional[str]:
         """
-        Headless Chromium fallback for livesearch when aiohttp is blocked.
-        Visits homepage first to establish session before hitting livesearch.
-        Runs in its own thread + event loop, identical pattern to f16px.py.
+        Headless Chromium with residential proxy for livesearch.
+        Proxy routes requests through a residential ISP IP, bypassing
+        the datacenter IP block on movies2watch.biz.
         """
         def _fetch_sync():
             async def _do() -> Optional[str]:
                 from playwright.async_api import async_playwright
+                from config import settings
                 url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
                 logger.info(f"[movies2watch] Playwright livesearch: {url}")
                 async with async_playwright() as p:
@@ -90,6 +91,11 @@ class Movies2WatchScraper(BaseScraper):
                             "--disable-dev-shm-usage",
                             "--disable-blink-features=AutomationControlled",
                         ],
+                        proxy={
+                            "server":   settings.PROXY_SERVER,
+                            "username": settings.PROXY_USERNAME,
+                            "password": settings.PROXY_PASSWORD,
+                        },
                     )
                     context = await browser.new_context(
                         user_agent=(
@@ -109,7 +115,7 @@ class Movies2WatchScraper(BaseScraper):
                     )
                     page = await context.new_page()
 
-                    # Visit homepage first to establish session + pass JS challenge
+                    # Visit homepage first to establish session
                     try:
                         await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=15_000)
                         await asyncio.sleep(2)
@@ -160,11 +166,11 @@ class Movies2WatchScraper(BaseScraper):
                 },
             )
         except Exception:
-            pass  # fall through to Playwright
+            pass
 
-        # Playwright fallback — real Chromium bypasses IP/JS challenge blocks
+        # Playwright + residential proxy fallback
         if not html:
-            logger.info(f"[movies2watch] aiohttp blocked for '{query}', falling back to Playwright")
+            logger.info(f"[movies2watch] aiohttp blocked for '{query}', falling back to Playwright+proxy")
             try:
                 html = await self._livesearch_via_playwright(query)
             except Exception as e:
