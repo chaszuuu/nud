@@ -145,7 +145,12 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
     if (!sub) return
     fetch(sub.file)
       .then(r => r.text())
-      .then(text => { vttCuesRef.current = parseVTT(text) })
+      .then(text => {
+        console.log('[VTT] first 300 chars:', text.slice(0, 300))
+        const cues = parseVTT(text)
+        console.log('[VTT] cue count:', cues.length, 'first cue:', cues[0])
+        vttCuesRef.current = cues
+      })
       .catch(e => console.warn('VTT load failed:', e))
   }, [activeSubtitle, subtitles])
 
