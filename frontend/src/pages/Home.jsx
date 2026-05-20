@@ -237,7 +237,11 @@ function ContinueCard({ item }) {
   const navigate = useNavigate()
 
   const handleClick = () => {
-    navigate(`/watch/${item.content_id}`)
+    if (item.season && item.episode) {
+      navigate(`/watch/${item.content_id}?season=${item.season}&episode=${item.episode}`)
+    } else {
+      navigate(`/watch/${item.content_id}`)
+    }
   }
 
   const pct = item.progress

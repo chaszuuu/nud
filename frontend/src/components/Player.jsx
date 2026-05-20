@@ -109,18 +109,30 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
   // ── VTT parser ────────────────────────────────────────────
   const parseVTT = (text) => {
     const cues = []
-    const blocks = text.split(/\n\n+/)
+    // Normalize line endings, strip BOM and WEBVTT header
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/^\uFEFF/, '')
+    const blocks = normalized.split(/\n{2,}/)
+
+    const parseTime = (t) => {
+      // handles both HH:MM:SS.mmm and MM:SS.mmm
+      const parts = t.trim().replace(',', '.').split(':')
+      return parts.reduce((acc, p, i) => acc + parseFloat(p) * Math.pow(60, parts.length - 1 - i), 0)
+    }
+
     for (const block of blocks) {
       const lines = block.trim().split('\n')
-      const timeLine = lines.find(l => l.includes('-->'))
-      if (!timeLine) continue
-      const [start, end] = timeLine.split('-->').map(t => {
-        const parts = t.trim().replace(',', '.').split(':')
-        return parts.reduce((acc, p, i) => acc + parseFloat(p) * Math.pow(60, parts.length - 1 - i), 0)
-      })
-      const text = lines.slice(lines.indexOf(timeLine) + 1).join('\n').trim()
-      if (text) cues.push({ start, end, text })
+      const timeIdx = lines.findIndex(l => l.includes('-->'))
+      if (timeIdx === -1) continue
+
+      const [startStr, endStr] = lines[timeIdx].split('-->').map(s => s.split(' ')[0]) // strip positioning tags
+      const start = parseTime(startStr)
+      const end = parseTime(endStr)
+      if (isNaN(start) || isNaN(end)) continue
+
+      const textLines = lines.slice(timeIdx + 1).join('\n').trim()
+      if (textLines) cues.push({ start, end, text: textLines })
     }
+
     return cues
   }
 
@@ -143,7 +155,7 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
     if (!video) return
     const onTime = () => {
       const t = video.currentTime
-      const cue = vttCuesRef.current.find(c => t >= c.start && t <= c.end) || null
+      const cue = vttCuesRef.current.find(c => t >= c.start && t < c.end) ?? null
       setCurrentCue(cue?.text ?? null)
     }
     video.addEventListener('timeupdate', onTime)
