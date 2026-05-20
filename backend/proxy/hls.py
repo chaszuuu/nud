@@ -73,24 +73,37 @@ CDN_REFERERS: dict[str, str] = {
 }
 
 _session: aiohttp.ClientSession = None
+_proxy_session: aiohttp.ClientSession = None
 
 
-async def get_session() -> aiohttp.ClientSession:
-    global _session
-    if _session is None or _session.closed:
-        connector = aiohttp.TCPConnector(
-            limit=100,
-            ttl_dns_cache=300,
-            keepalive_timeout=60,
-        )
-        _session = aiohttp.ClientSession(timeout=TIMEOUT, connector=connector)
-    return _session
+async def get_session(use_proxy: bool = False) -> aiohttp.ClientSession:
+    global _session, _proxy_session
+
+    if use_proxy:
+        if _proxy_session is None or _proxy_session.closed:
+            connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300)
+            _proxy_session = aiohttp.ClientSession(
+                timeout=TIMEOUT,
+                connector=connector,
+                trust_env=False,
+            )
+        return _proxy_session
+    else:
+        if _session is None or _session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                ttl_dns_cache=300,
+                keepalive_timeout=60,
+            )
+            _session = aiohttp.ClientSession(timeout=TIMEOUT, connector=connector)
+        return _session
 
 
 async def close_session():
-    global _session
-    if _session and not _session.closed:
-        await _session.close()
+    global _session, _proxy_session
+    for s in (_session, _proxy_session):
+        if s and not s.closed:
+            await s.close()
 
 
 def _get_referer(netloc: str, fallback: str) -> tuple[str, str]:
@@ -192,12 +205,13 @@ async def proxy_hls(request: Request, url: str = Query(...)):
     req_headers["Referer"] = referer
     req_headers["Origin"] = origin
 
-    proxy = _get_residential_proxy() if _needs_residential_proxy(parsed.netloc) else None
-    if proxy:
+    use_proxy = _needs_residential_proxy(parsed.netloc)
+    proxy = _get_residential_proxy() if use_proxy else None
+    if use_proxy:
         logger.debug(f"[proxy] using residential proxy for {parsed.netloc}")
 
     try:
-        session = await get_session()
+        session = await get_session(use_proxy=use_proxy)
         resp = await session.get(url, headers=req_headers, proxy=proxy)
 
         if resp.status not in (200, 206, 304):
