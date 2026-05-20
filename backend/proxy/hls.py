@@ -16,12 +16,10 @@ router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
-CHUNK_SIZE = 1024 * 512  # 512 KB
+CHUNK_SIZE = 1024 * 512
 
 ALLOWED_EXTENSIONS = {".m3u8", ".ts", ".key", ".aac", ".mp4", ".vtt", ".webvtt"}
 
-# Domains that movies2watch.biz is known to serve streams from.
-# Extend this list as you discover new CDN hostnames in stream URLs.
 CDN_WHITELIST = [
     "netmagcdn.com",
     "rapid-cloud.co",
@@ -31,6 +29,11 @@ CDN_WHITELIST = [
     "sprintcdn.r66nv9ed.com",
     "f16px.com",
     "0123movie.space",
+    "qqqcdn.cloud",
+]
+
+# CDNs behind Cloudflare that block datacenter IPs - route through residential proxy
+CLOUDFLARE_CDNS = [
     "qqqcdn.cloud",
 ]
 
@@ -67,7 +70,6 @@ CDN_REFERERS: dict[str, str] = {
     "f16px":        "https://f16px.com/",
     "0123movie":    "https://movies2watch.biz/",
     "qqqcdn":       "https://f16px.com/",
-
 }
 
 _session: aiohttp.ClientSession = None
@@ -96,6 +98,20 @@ def _get_referer(netloc: str, fallback: str) -> tuple[str, str]:
         if key in netloc:
             return ref, ref.rstrip("/")
     return fallback, fallback.rstrip("/")
+
+
+def _get_residential_proxy() -> str | None:
+    server = getattr(settings, "PROXY_SERVER", None)
+    username = getattr(settings, "PROXY_USERNAME", None)
+    password = getattr(settings, "PROXY_PASSWORD", None)
+    if server and username and password:
+        server_clean = server.replace("http://", "")
+        return f"http://{username}:{password}@{server_clean}"
+    return None
+
+
+def _needs_residential_proxy(netloc: str) -> bool:
+    return any(cdn in netloc for cdn in CLOUDFLARE_CDNS)
 
 
 def _validate_stream_url(url: str) -> str:
@@ -176,9 +192,13 @@ async def proxy_hls(request: Request, url: str = Query(...)):
     req_headers["Referer"] = referer
     req_headers["Origin"] = origin
 
+    proxy = _get_residential_proxy() if _needs_residential_proxy(parsed.netloc) else None
+    if proxy:
+        logger.debug(f"[proxy] using residential proxy for {parsed.netloc}")
+
     try:
         session = await get_session()
-        resp = await session.get(url, headers=req_headers)
+        resp = await session.get(url, headers=req_headers, proxy=proxy)
 
         if resp.status not in (200, 206, 304):
             body = await resp.text()
