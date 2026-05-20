@@ -66,6 +66,8 @@ CDN_REFERERS: dict[str, str] = {
     "sprintcdn":    "https://f16px.com/",
     "f16px":        "https://f16px.com/",
     "0123movie":    "https://movies2watch.biz/",
+    "qqqcdn":       "https://f16px.com/",
+
 }
 
 _session: aiohttp.ClientSession = None
