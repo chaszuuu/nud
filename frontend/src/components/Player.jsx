@@ -109,14 +109,19 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
   // ── VTT parser ────────────────────────────────────────────
   const parseVTT = (text) => {
     const cues = []
-    // Normalize line endings, strip BOM and WEBVTT header
-    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/^\uFEFF/, '')
+    const normalized = text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/^\uFEFF/, '')
+      .replace(/^WEBVTT[^\n]*\n/, '')  // strip WEBVTT header line
+      .trim()
+
     const blocks = normalized.split(/\n{2,}/)
 
     const parseTime = (t) => {
-      // handles both HH:MM:SS.mmm and MM:SS.mmm
       const parts = t.trim().replace(',', '.').split(':')
-      return parts.reduce((acc, p, i) => acc + parseFloat(p) * Math.pow(60, parts.length - 1 - i), 0)
+      return parts.reduce((acc, p, i) => 
+        acc + parseFloat(p) * Math.pow(60, parts.length - 1 - i), 0)
     }
 
     for (const block of blocks) {
@@ -124,7 +129,9 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
       const timeIdx = lines.findIndex(l => l.includes('-->'))
       if (timeIdx === -1) continue
 
-      const [startStr, endStr] = lines[timeIdx].split('-->').map(s => s.split(' ')[0]) // strip positioning tags
+      const timeParts = lines[timeIdx].split('-->')
+      const startStr = timeParts[0].split(' ')[0]
+      const endStr = timeParts[1].trim().split(' ')[0]
       const start = parseTime(startStr)
       const end = parseTime(endStr)
       if (isNaN(start) || isNaN(end)) continue
