@@ -22,6 +22,8 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
   const [activeSubtitle, setActiveSubtitle] = useState(null)
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [currentCue, setCurrentCue] = useState(null)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1)
+  const [showSpeed, setShowSpeed] = useState(false)
   const vttCuesRef = useRef([])
   const controlsTimer = useRef(null)
   const containerRef = useRef(null)
@@ -113,14 +115,14 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
       .replace(/^\uFEFF/, '')
-      .replace(/^WEBVTT[^\n]*\n/, '')  // strip WEBVTT header line
+      .replace(/^WEBVTT[^\n]*\n/, '')
       .trim()
 
     const blocks = normalized.split(/\n{2,}/)
 
     const parseTime = (t) => {
       const parts = t.trim().replace(',', '.').split(':')
-      return parts.reduce((acc, p, i) => 
+      return parts.reduce((acc, p, i) =>
         acc + parseFloat(p) * Math.pow(60, parts.length - 1 - i), 0)
     }
 
@@ -153,10 +155,7 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
     fetch(sub.file)
       .then(r => r.text())
       .then(text => {
-        console.log('[VTT] first 300 chars:', text.slice(0, 300))
-        const cues = parseVTT(text)
-        console.log('[VTT] cue count:', cues.length, 'first cue:', cues[0])
-        vttCuesRef.current = cues
+        vttCuesRef.current = parseVTT(text)
       })
       .catch(e => console.warn('VTT load failed:', e))
   }, [activeSubtitle, subtitles])
@@ -338,10 +337,18 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
     setShowSubtitles(false)
   }
 
+  const changeSpeed = (speed) => {
+    if (videoRef.current) videoRef.current.playbackRate = speed
+    setPlaybackSpeed(speed)
+    setShowSpeed(false)
+  }
+
   const fmt = (s) => {
     if (!s || isNaN(s)) return '0:00'
-    const m = Math.floor(s / 60)
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
     const sec = Math.floor(s % 60)
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`
     return `${m}:${sec.toString().padStart(2, '0')}`
   }
 
@@ -349,9 +356,10 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
   const bufferedPct = duration ? (buffered / duration) * 100 : 0
 
   const handleContainerClick = (e) => {
-    if (showQuality || showSubtitles) {
+    if (showQuality || showSubtitles || showSpeed) {
       setShowQuality(false)
       setShowSubtitles(false)
+      setShowSpeed(false)
     } else {
       togglePlay()
     }
@@ -504,7 +512,7 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
               {subtitles.length > 0 && (
                 <div className="relative">
                   <button
-                    onClick={() => { setShowSubtitles(!showSubtitles); setShowQuality(false) }}
+                    onClick={() => { setShowSubtitles(!showSubtitles); setShowQuality(false); setShowSpeed(false) }}
                     className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border transition-all ${
                       activeSubtitle
                         ? 'text-accent border-accent/50 bg-accent/10'
@@ -553,11 +561,38 @@ export default function Player({ streamUrl, subtitles = [], title, onProgress, o
                 </div>
               )}
 
+              {/* playback speed */}
+              <div className="relative">
+                <button
+                  onClick={() => { setShowSpeed(!showSpeed); setShowQuality(false); setShowSubtitles(false) }}
+                  className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border border-white/20 text-white/70 hover:text-white hover:border-accent/50 transition-all"
+                >
+                  {playbackSpeed === 1 ? '1x' : `${playbackSpeed}x`}
+                </button>
+                {showSpeed && (
+                  <div className="absolute bottom-8 right-0 bg-surface border border-surface-border rounded-lg overflow-hidden shadow-xl w-24">
+                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(speed => (
+                      <button
+                        key={speed}
+                        onClick={() => changeSpeed(speed)}
+                        className={`w-full px-3 py-2 text-xs text-left transition-colors ${
+                          playbackSpeed === speed
+                            ? 'text-accent bg-accent/10'
+                            : 'text-gray-300 hover:text-white hover:bg-surface-hover'
+                        }`}
+                      >
+                        {speed === 1 ? 'Normal' : `${speed}x`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* quality picker */}
               {qualities.length > 1 && (
                 <div className="relative">
                   <button
-                    onClick={() => { setShowQuality(!showQuality); setShowSubtitles(false) }}
+                    onClick={() => { setShowQuality(!showQuality); setShowSubtitles(false); setShowSpeed(false) }}
                     className="text-white/70 hover:text-white text-xs font-medium px-2 py-1 rounded border border-white/20 hover:border-accent/50 transition-all"
                   >
                     {quality === -1 ? 'Auto' : qualities.find(q => q.index === quality)?.label}
