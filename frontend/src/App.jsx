@@ -1,5 +1,5 @@
-// src/App.jsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
+import Footer from './components/Footer'
 import Home from './pages/Home'
 import Search from './pages/Search'
 import Movie from './pages/Movie'
@@ -7,9 +7,12 @@ import Series from './pages/Series'
 import Watch from './pages/Watch'
 import Login from './pages/Login'
 
-function App() {
+function Layout() {
+  const location = useLocation()
+  const hideFooter = location.pathname.startsWith('/watch')
+
   return (
-    <BrowserRouter>
+    <>
       <Routes>
         <Route path="/"              element={<Home />} />
         <Route path="/search"        element={<Search />} />
@@ -19,6 +22,15 @@ function App() {
         <Route path="/login"         element={<Login />} />
         <Route path="/auth/callback" element={<Login />} />
       </Routes>
+      {!hideFooter && <Footer />}
+    </>
+  )
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Layout />
     </BrowserRouter>
   )
 }
