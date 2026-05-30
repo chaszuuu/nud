@@ -41,12 +41,20 @@ class BaseScraper(ABC):
         server = getattr(settings, "PROXY_SERVER", None)
         username = getattr(settings, "PROXY_USERNAME", None)
         password = getattr(settings, "PROXY_PASSWORD", None)
-    
+
         if server and username and password:
-            # aiohttp requires credentials embedded in the proxy URL
-            # http://user:pass@host:port
             server_clean = server.replace("http://", "")
             return f"http://{username}:{password}@{server_clean}"
+        return None
+
+    def _get_playwright_proxy(self) -> Optional[dict]:
+        """Playwright-compatible proxy config, or None if not configured."""
+        server   = getattr(settings, "PROXY_SERVER", None)
+        username = getattr(settings, "PROXY_USERNAME", None)
+        password = getattr(settings, "PROXY_PASSWORD", None)
+
+        if server and username and password:
+            return {"server": server, "username": username, "password": password}
         return None
 
     async def _get_with_cloudscraper(self, url: str, headers: dict = {}) -> str:
@@ -79,7 +87,6 @@ class BaseScraper(ABC):
                     return await resp.text()
             except aiohttp.ClientResponseError as e:
                 if e.status == 521:
-                    # Cloudflare block — try cloudscraper
                     try:
                         return await self._get_with_cloudscraper(
                             url,

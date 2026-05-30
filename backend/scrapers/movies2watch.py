@@ -2,7 +2,6 @@
 import re
 import asyncio
 import logging
-import concurrent.futures
 from typing import Optional
 from urllib.parse import urlencode
 from scrapers.base import BaseScraper
@@ -58,11 +57,80 @@ def _fix_embed_url(url: str) -> str:
 
 
 def _extract_year(block: str) -> Optional[int]:
-    """Extract a 4-digit year from an HTML block, e.g. a search result item."""
     m = re.search(r'\b(19\d{2}|20\d{2})\b', block)
     if m:
         return int(m.group(1))
     return None
+
+
+def _livesearch_sync(query: str, proxy_config: Optional[dict]) -> Optional[str]:
+    """
+    Module-level sync worker for Playwright livesearch.
+    Runs in a thread via run_in_executor — no self, no closure, no ambiguity.
+    """
+    async def _do() -> Optional[str]:
+        from playwright.async_api import async_playwright
+        url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
+        logger.info(f"[movies2watch] Playwright livesearch: {url}")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+                proxy=proxy_config,
+            )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+                locale="en-US",
+                timezone_id="America/New_York",
+                extra_http_headers={
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            page = await context.new_page()
+
+            # Visit homepage first to establish session
+            try:
+                await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=15_000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+
+            try:
+                response = await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=15_000,
+                )
+                if response and response.status == 200:
+                    return await response.text()
+                logger.warning(
+                    f"[movies2watch] Playwright livesearch status: "
+                    f"{response.status if response else 'None'}"
+                )
+                return None
+            finally:
+                await page.close()
+                await context.close()
+                await browser.close()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_do())
+    finally:
+        loop.close()
 
 
 class Movies2WatchScraper(BaseScraper):
@@ -72,84 +140,10 @@ class Movies2WatchScraper(BaseScraper):
     # ------------------------------------------------------------------ #
 
     async def _livesearch_via_playwright(self, query: str) -> Optional[str]:
-        """
-        Headless Chromium with residential proxy for livesearch.
-        Proxy routes requests through a residential ISP IP, bypassing
-        the datacenter IP block on movies2watch.biz.
-        """
-        def _fetch_sync():
-            async def _do() -> Optional[str]:
-                from playwright.async_api import async_playwright
-                from config import settings
-                url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
-                logger.info(f"[movies2watch] Playwright livesearch: {url}")
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-blink-features=AutomationControlled",
-                        ],
-                        proxy={
-                            "server":   settings.PROXY_SERVER,
-                            "username": settings.PROXY_USERNAME,
-                            "password": settings.PROXY_PASSWORD,
-                        },
-                    )
-                    context = await browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/122.0.0.0 Safari/537.36"
-                        ),
-                        viewport={"width": 1280, "height": 800},
-                        locale="en-US",
-                        timezone_id="America/New_York",
-                        extra_http_headers={
-                            "Accept": "*/*",
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Accept-Encoding": "gzip, deflate, br",
-                            "X-Requested-With": "XMLHttpRequest",
-                        },
-                    )
-                    page = await context.new_page()
-
-                    # Visit homepage first to establish session
-                    try:
-                        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=15_000)
-                        await asyncio.sleep(2)
-                    except Exception:
-                        pass
-
-                    try:
-                        response = await page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=15_000,
-                        )
-                        if response and response.status == 200:
-                            return await response.text()
-                        logger.warning(
-                            f"[movies2watch] Playwright livesearch status: "
-                            f"{response.status if response else 'None'}"
-                        )
-                        return None
-                    finally:
-                        await page.close()
-                        await context.close()
-                        await browser.close()
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(_do())
-            finally:
-                loop.close()
-
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return await loop.run_in_executor(pool, _fetch_sync)
+        proxy_config = self._get_playwright_proxy()
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _livesearch_sync, query, proxy_config
+        )
 
     async def search(self, query: str) -> list[dict]:
         url = f"{BASE_URL}/livesearch?{urlencode({'q': query})}"
@@ -279,7 +273,6 @@ class Movies2WatchScraper(BaseScraper):
     # ------------------------------------------------------------------ #
 
     async def _resolve_embed(self, embed_url: str) -> Optional[dict]:
-        # If it's a wrapper site, follow the redirect to get the real f16px URL
         if "0123movie.space" in embed_url or "f16px" not in embed_url:
             try:
                 session = await self._get_session()
