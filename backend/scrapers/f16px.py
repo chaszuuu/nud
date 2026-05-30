@@ -21,10 +21,12 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_S   = 45
-COOKIE_KEY  = "f16px:cookies"        # Redis key
+TIMEOUT_S   = 60          # was 45 — Render free tier is slow
+WAIT_AFTER_LOAD = 8       # was 5 — give page more time to fire m3u8 request
+M3U8_WAIT   = 30          # remaining time to wait for m3u8 after page loads
+COOKIE_KEY  = "f16px:cookies"
 WARMUP_URL  = "https://f16px.com/"
-COOKIE_TTL  = 60 * 60 * 24 * 7      # 7 days in seconds
+COOKIE_TTL  = 60 * 60 * 24 * 7
 
 
 @dataclass
@@ -220,7 +222,8 @@ def _resolve_sync(embed_url: str) -> Optional[StreamResult]:
             try:
                 await page.goto(embed_url, wait_until="domcontentloaded", timeout=TIMEOUT_S * 1000)
                 logger.info(f"[f16px] page loaded, current url: {page.url}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(WAIT_AFTER_LOAD)
+
                 if not subtitles:
                     sub_match = re.search(r'sub\.info=([^&\s]+)', embed_url)
                     if sub_match:
@@ -228,7 +231,7 @@ def _resolve_sync(embed_url: str) -> Optional[StreamResult]:
 
                 m3u8_url = await asyncio.wait_for(
                     asyncio.shield(m3u8_future),
-                    timeout=TIMEOUT_S,
+                    timeout=M3U8_WAIT,
                 )
                 if m3u8_url:
                     await asyncio.sleep(3)
